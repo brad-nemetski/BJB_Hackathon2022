@@ -91,10 +91,59 @@ def get_user_types(curr):
     )
 
 
+def get_matches_misses_deletes(curr) -> pd.DataFrame:
+    lazy_sql = """
+    select matches.*, misses.misses
+from (
+	select 
+		cs."id",
+		cs."userId",
+		cs."orgId",
+		cs.termdatasourceids,
+		cs.canonicalname,
+		cs.matchedtext,
+		count(*) as matches
+	from "auth"."public"."ChoosenSuggestion" cs
+	inner join "auth"."public"."PossibleSuggestions" ps
+	on cs.dbid  = ps.dbid 
+	and cs.id = ps.id
+	group by cs."id",
+		cs."userId",
+		cs."orgId",
+		cs.termdatasourceids,
+		cs.canonicalname,
+		cs.matchedtext
+) matches	
+left join (
+	select 
+		cs."id",
+		cs."userId",
+		cs."orgId",
+		cs.termdatasourceids,
+		cs.canonicalname,
+		cs.matchedtext,
+		count(*) as misses
+	from "auth"."public"."ChoosenSuggestion" cs
+	inner join "auth"."public"."PossibleSuggestions" ps
+	on cs.dbid  = ps.dbid 
+	and cs.id != ps.id
+	group by cs."id",
+		cs."userId",
+		cs."orgId",
+		cs.termdatasourceids,
+		cs.canonicalname,
+		cs.matchedtext
+) misses
+on matches."id" = misses."id"
+    """
+
+    return get_raw_data(curr, lazy_sql)
+
+
 if __name__ == "__main__":
     database = "auth"
     user = "postgres"
-    password = ""
+    password = "Jtu6Q6KeA37oQnJvNVXN"
     host = "bjb-prototyping.ch8k24g0z0fb.us-east-1.rds.amazonaws.com"
     port = "5432"
 
@@ -107,7 +156,7 @@ if __name__ == "__main__":
     )
     cursor = conn.cursor()
 
-    for table in ["UserTypes", "ExecuteResult", "ChoosenSuggestion", "PossibleSuggestions"]:
+    for table in ["UserTypes", "ExecuteResult", "ChoosenSuggestion", "PossibleSuggestions", "Weighting"]:
         cursor.execute(f"""drop table if exists "public"."{table}" """)
 
     conn.commit()
@@ -129,3 +178,7 @@ if __name__ == "__main__":
     exec_results_df: pd.DataFrame = get_execute_result(cursor)
     # print(exec_results_df.to_string())
     exec_results_df.to_sql("ExecuteResult", engine, schema="public")
+
+    m_m_d: pd.DataFrame = get_matches_misses_deletes(cursor)
+    # print(m_m_d.to_string())
+    m_m_d.to_sql("Weighting", engine, schema="public", index=False)
