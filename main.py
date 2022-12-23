@@ -56,6 +56,24 @@ def get_chosen_selection(curr) -> pd.DataFrame:
     return explode_json(df_init, return_json, ["db_id", "executionId", "userId", "orgId", "createdAt", "sessionId"])
 
 
+def get_deletes(curr) -> pd.DataFrame:
+    query = """select s."id" as db_id, s."executionId", s."userId", s."orgId", s."createdAt", s."sessionId", s."value" 
+    from "rogo-auth"."SearchEvent" as s where "type" = 'DeleteVisualQueryItem'; """
+
+    df_init = get_raw_data(curr, query)
+
+    def return_json(x):
+        return [x["value"]["deletedTerm"]]
+
+    flattened_df = explode_json(
+        df_init, return_json, ["db_id", "executionId", "userId", "orgId", "createdAt", "sessionId"]
+    )
+
+    flattened_df["id"] = flattened_df["key"].apply(lambda x: x.split("-")[0])
+
+    return flattened_df
+
+
 def get_execute_result(curr) -> pd.DataFrame:
     query = """select s."id" as db_id, s."executionId", s."userId", s."orgId", s."createdAt", s."sessionId", s."value" 
     from "rogo-auth"."SearchEvent" as s where "type" = 'ExecuteResult'; """
@@ -93,8 +111,8 @@ def get_user_types(curr):
 
 def get_matches_misses_deletes(curr) -> pd.DataFrame:
     lazy_sql = """
-    select matches.*, misses.misses
-from (
+    select matches.*, misses.misses, deletes.deletes
+    from (
 	select 
 		cs."id",
 		cs."userId",
@@ -113,15 +131,10 @@ from (
 		cs.termdatasourceids,
 		cs.canonicalname,
 		cs.matchedtext
-) matches	
-left join (
+    ) matches	
+    left join (  -- should be a full outer join, but don't want to hack in the plumbing
 	select 
 		cs."id",
-		cs."userId",
-		cs."orgId",
-		cs.termdatasourceids,
-		cs.canonicalname,
-		cs.matchedtext,
 		count(*) as misses
 	from "auth"."public"."ChoosenSuggestion" cs
 	inner join "auth"."public"."PossibleSuggestions" ps
@@ -133,9 +146,16 @@ left join (
 		cs.termdatasourceids,
 		cs.canonicalname,
 		cs.matchedtext
-) misses
-on matches."id" = misses."id"
-    """
+    ) misses
+    on matches."id" = misses."id"
+    left join (    -- should be a full outer join, but don't have all the data we need
+        select 
+            d."id",
+            count(*) as deletes
+        from "auth"."public"."deletes" d
+        group by d."id"
+    ) deletes
+    on matches."id" = deletes."id" """
 
     return get_raw_data(curr, lazy_sql)
 
@@ -156,29 +176,40 @@ if __name__ == "__main__":
     )
     cursor = conn.cursor()
 
-    for table in ["UserTypes", "ExecuteResult", "ChoosenSuggestion", "PossibleSuggestions", "Weighting"]:
+    for table in ["UserTypes", "ExecuteResult", "ChoosenSuggestion", "PossibleSuggestions", "Weighting", "deletes"]:
         cursor.execute(f"""drop table if exists "public"."{table}" """)
 
     conn.commit()
 
     engine = create_engine(f"postgresql://{user}:{password}@{host}:{port}/{database}")
 
-    PossibleSuggestions: pd.DataFrame = get_possible_selections(cursor)
-    # print(PossibleSuggestions.to_string())
-    PossibleSuggestions.to_sql("PossibleSuggestions", engine, schema="public")
+    try:
+        deletes: pd.DataFrame = get_deletes(cursor)
+        # print(deletes.to_string())
+        deletes.to_sql("deletes", engine, schema="public")
 
-    choose_selection: pd.DataFrame = get_chosen_selection(cursor)
-    # print(choose_selection.to_string())
-    choose_selection.to_sql("ChoosenSuggestion", engine, schema="public")
+        possible_suggestions: pd.DataFrame = get_possible_selections(cursor)
+        # print(possible_suggestions.to_string())
+        possible_suggestions.to_sql("PossibleSuggestions", engine, schema="public")
 
-    user_types_df: pd.DataFrame = get_user_types(cursor)
-    # print(user_types_df.to_string())
-    user_types_df.to_sql("UserTypes", engine, schema="public")
+        choose_selection: pd.DataFrame = get_chosen_selection(cursor)
+        # print(choose_selection.to_string())
+        choose_selection.to_sql("ChoosenSuggestion", engine, schema="public")
 
-    exec_results_df: pd.DataFrame = get_execute_result(cursor)
-    # print(exec_results_df.to_string())
-    exec_results_df.to_sql("ExecuteResult", engine, schema="public")
+        user_types_df: pd.DataFrame = get_user_types(cursor)
+        # print(user_types_df.to_string())
+        user_types_df.to_sql("UserTypes", engine, schema="public")
 
-    m_m_d: pd.DataFrame = get_matches_misses_deletes(cursor)
-    # print(m_m_d.to_string())
-    m_m_d.to_sql("Weighting", engine, schema="public", index=False)
+        exec_results_df: pd.DataFrame = get_execute_result(cursor)
+        # print(exec_results_df.to_string())
+        exec_results_df.to_sql("ExecuteResult", engine, schema="public")
+
+        m_m_d: pd.DataFrame = get_matches_misses_deletes(cursor)
+        # print(m_m_d.to_string())
+        m_m_d.to_sql("Weighting", engine, schema="public", index=False)
+        conn.close()
+        engine.dispose()
+    except:
+        conn.close()
+        engine.dispose()
+        raise
