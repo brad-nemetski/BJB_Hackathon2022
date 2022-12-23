@@ -18,6 +18,9 @@ def explode_json(df, func, columns):
     df = pd.concat([exploded[columns].reset_index(drop=True),
                     pd.json_normalize(exploded["query_details"])], axis=1)
 
+    columns = df.columns
+    columns = [''.join(e for e in col if e.isalnum()) for col in columns]
+    df.columns = columns
     return df
 
 
