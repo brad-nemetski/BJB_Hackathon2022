@@ -18,9 +18,11 @@ def explode_json(df, func, columns):
     df = pd.concat([exploded[columns].reset_index(drop=True),
                     pd.json_normalize(exploded["query_details"])], axis=1)
 
-    columns = df.columns
-    columns = [''.join(e for e in col if e.isalnum()) for col in columns]
-    df.columns = columns
+    df["Rank"] = df.groupby("executionId")["createdAt"].rank(method="first", ascending=True)
+
+    messy_columns = df.columns
+    clean_columns = [''.join(e for e in col if e.isalnum()) for col in messy_columns]
+    df.columns = clean_columns
     return df
 
 
@@ -72,4 +74,5 @@ if __name__ == "__main__":
     user_types_df.to_sql("UserTypes", engine, schema="public")
 
     exec_results_df: pd.DataFrame = get_execute_result(cursor)
+    # print(exec_results_df.to_string())
     exec_results_df.to_sql("ExecuteResult", engine, schema="public")
